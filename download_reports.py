@@ -10,6 +10,8 @@ import io
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import requests
 from dotenv import load_dotenv
 
@@ -106,6 +108,16 @@ def reshape_report(csv_bytes):
     return long
 
 
+def write_parquet(df, path):
+    """Write `df` as parquet with plain utf8 strings; pandas 3 emits large_utf8, which Alteryx can't read."""
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    schema = pa.schema([
+        field.with_type(pa.string()) if pa.types.is_large_string(field.type) else field
+        for field in table.schema
+    ], metadata=table.schema.metadata)
+    pq.write_table(table.cast(schema), path)
+
+
 def process_message(headers, user_email, message):
     """Save each CSV attachment of `message` as parquet, skipping ones already on disk. Returns (saved, skipped)."""
     received_at = pd.to_datetime(message['receivedDateTime'], utc=True)
@@ -140,7 +152,7 @@ def process_message(headers, user_email, message):
 
             # Write to a temp file first so an interrupted run never leaves a partial file that looks done
             tmp_path = target_path.with_suffix('.parquet.tmp')
-            df.to_parquet(tmp_path, index=False)
+            write_parquet(df, tmp_path)
             tmp_path.replace(target_path)
             saved += 1
             print(f"  saved {target_path.name} ({len(df):,} rows)")
